@@ -49,6 +49,10 @@ ruoyi_agent/
 
 工具保持函数形式；各业务模块声明工具与所需权限，`agent.py` 统一组装并按当前用户筛选。
 
+若依前端源码位于 `sources/RuoYi-Vue3`，包含聊天、查询约束和知识库管理页面；
+Java 源码位于 `sources/RuoYi-Vue`，包含查询约束接口及用户昵称筛选等配套修改。
+这两个目录已包含本项目的集成代码，可直接安装依赖和构建。
+
 ## 启动
 
 ```powershell
@@ -66,7 +70,28 @@ uv run uvicorn ruoyi_agent.app:create_app --factory --workers 1 --loop ruoyi_age
 
 `.env` 保存模型密钥、若依地址、数据库和 Milvus 连接配置，已加入 Git 忽略；参考 `.env.example` 填写实际值。
 需要已运行的若依 Java 服务、PostgreSQL、MySQL 只读账号和支持内置向量化、重排的 Milvus 服务。
-若依前端与 Java 的定制补丁及上游版本见 [若依集成说明](integrations/README.md)。
+
+若依前端使用 Node.js 和 npm，在独立终端启动：
+
+```powershell
+cd sources/RuoYi-Vue3
+npm install
+npm run dev -- --port 5173
+```
+
+Vite 将 `/dev-api` 转发到本机 Java 的 8080 端口，将 `/agent-api` 转发到本机 Python 的 8000 端口。
+两个代理地址在 `sources/RuoYi-Vue3/vite.config.js` 中配置。
+
+Java 使用 JDK 17 和 Maven。从仓库根目录构建、启动：
+
+```powershell
+mvn -f sources/RuoYi-Vue/pom.xml -DskipTests package
+java -jar sources/RuoYi-Vue/ruoyi-admin/target/ruoyi-admin.jar --spring.config.additional-location=file:../ruoyi-local-config/
+```
+
+启动前，按自己的环境在仓库外的 `../ruoyi-local-config/` 中准备 `application.yml` 和
+`application-druid.yml`，填写若依 MySQL、Redis 和本机文件目录配置；实际凭据不纳入源码提交。
+首次使用若依还需初始化其数据库，并在菜单管理中配置本项目页面及权限。
 
 另开一个终端启动知识库后台进程：
 
@@ -216,4 +241,11 @@ Milvus 服务端需配置 DashScope embedding provider 和 ali rerank provider �
 
 本地已验证身份隔离、会话归属、审核恢复与重复提交、输入边界、Java 错误、
 真实 LangGraph 中断恢复、字段保留及取消连接，以及知识库上传、云端解析、检索、重处理和删除。
-应用前端补丁后，可在若依 Vue 3 仓库执行 `npm run build:prod` 验证构建。
+可在 `sources/RuoYi-Vue3` 执行 `npm run build:prod` 验证前端构建，
+Java 构建使用上面的 Maven 命令。
+
+## 上游与许可
+
+前端基于 [RuoYi-Vue3](https://github.com/yangzongzhuan/RuoYi-Vue3)，Java 基于
+[RuoYi-Vue](https://github.com/yangzongzhuan/RuoYi-Vue) 的 `springboot3` 分支。
+两个上游项目均采用 MIT 许可；原有作者版权声明及 `LICENSE` 保留在对应 `sources/` 目录中。

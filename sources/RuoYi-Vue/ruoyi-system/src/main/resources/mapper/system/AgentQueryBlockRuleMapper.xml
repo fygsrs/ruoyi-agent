@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.ruoyi.system.mapper.AgentQueryBlockRuleMapper">
+
+    <resultMap type="AgentQueryBlockRule" id="AgentQueryBlockRuleResult">
+        <id property="id" column="id" />
+        <result property="databaseName" column="database_name" />
+        <result property="tableName" column="table_name" />
+        <result property="columnName" column="column_name" />
+        <result property="remark" column="remark" />
+        <result property="createBy" column="create_by" />
+        <result property="createTime" column="create_time" />
+        <result property="updateBy" column="update_by" />
+        <result property="updateTime" column="update_time" />
+    </resultMap>
+
+    <select id="selectRuleList" parameterType="AgentQueryBlockRule" resultMap="AgentQueryBlockRuleResult">
+        select id, database_name, table_name, column_name, remark,
+               create_by, create_time, update_by, update_time
+        from agent_query_block_rule
+        <where>
+            <if test="databaseName != null and databaseName != ''">
+                and database_name = #{databaseName}
+            </if>
+            <if test="tableName != null and tableName != ''">
+                and table_name = #{tableName}
+            </if>
+        </where>
+        order by database_name, table_name, column_name, id
+    </select>
+
+    <insert id="insertRule" parameterType="AgentQueryBlockRule" useGeneratedKeys="true" keyProperty="id">
+        insert into agent_query_block_rule
+            (database_name, table_name, column_name, remark, create_by, create_time)
+        values
+            (#{databaseName}, #{tableName}, #{columnName}, #{remark}, #{createBy}, sysdate())
+    </insert>
+
+    <update id="updateRule" parameterType="AgentQueryBlockRule">
+        update agent_query_block_rule
+        set database_name = #{databaseName}, table_name = #{tableName}, column_name = #{columnName},
+            remark = #{remark}, update_by = #{updateBy}, update_time = sysdate()
+        where id = #{id}
+    </update>
+
+    <delete id="deleteRuleByIds" parameterType="Long">
+        delete from agent_query_block_rule where id in
+        <foreach collection="array" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+</mapper>

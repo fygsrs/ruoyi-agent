@@ -1,16 +1,23 @@
 .runtime/
-deploy/artifacts/
-/sources/
 AGENTS.md
-/deploy/
-/tests/
-/test/
+deploy/
+tests/
+test/
+__tests__/
+test_*.py
+*.test.*
+*.spec.*
 .idea/
+.git/
+node_modules/
+target/
+coverage/
+*.log
 
 # Python-generated files
 __pycache__/
 *.py[oc]
-build/
+/build/
 dist/
 wheels/
 *.egg-info
@@ -20,6 +27,9 @@ wheels/
 .env
 .env.*
 !.env.example
+!/sources/RuoYi-Vue3/.env.development
+!/sources/RuoYi-Vue3/.env.production
+!/sources/RuoYi-Vue3/.env.staging
 
 .pytest_cache/
 /data/knowledge/
