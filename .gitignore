@@ -1,0 +1,25 @@
+.runtime/
+deploy/artifacts/
+/sources/
+AGENTS.md
+/deploy/
+/tests/
+/test/
+.idea/
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+.pytest_cache/
+/data/knowledge/

@@ -1,0 +1,43 @@
+[project]
+name = "ruoyi-agent"
+version = "0.1.0"
+description = "A minimal Python agent built with LangChain"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiomysql>=0.3.2",
+    "fastapi>=0.162.0",
+    "httpx>=0.28.1",
+    "langchain>=1.4.8",
+    "langchain-deepseek>=1.1.1",
+    "langchain-milvus==0.4.0",
+    "langchain-text-splitters>=1.1.2",
+    "langgraph-checkpoint-postgres>=3.2.0",
+    "mineru-open-sdk==0.1.1",
+    "psycopg[binary,pool]>=3.3.7",
+    "pymilvus==3.0.2",
+    "pymysql[rsa]>=1.2.3",
+    "python-dotenv>=1.2.4",
+    "python-multipart>=0.0.22",
+    "sqlglot>=30.29.0",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+ruoyi-agent = "ruoyi_agent.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "psutil>=7.2.2",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
+cache_dir = ".runtime/pytest-cache"
