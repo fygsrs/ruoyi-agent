@@ -87,4 +87,5 @@ async def get_current_user(
         operations=request.app.state.store,
         analytics=request.app.state.analytics,
         knowledge=request.app.state.knowledge,
+        images=request.app.state.images,
     )

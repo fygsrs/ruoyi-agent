@@ -1,6 +1,7 @@
 """Authenticated HTTP endpoints for conversations and review options."""
 
 from typing import Annotated
+from dataclasses import replace
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -31,7 +32,10 @@ async def list_threads(request: Request, user: Annotated[AgentContext, Depends(g
 async def get_thread(thread_id: UUID, request: Request, user: Annotated[AgentContext, Depends(get_current_user)]):
     await owned_thread(request.app.state.store, thread_id, user)
     snapshot = await request.app.state.agent.aget_state(thread_config(thread_id))
-    return {"thread_id": str(thread_id), "messages": visible_messages(snapshot),
+    messages = visible_messages(snapshot)
+    if user.images is not None:
+        messages = await user.images.restore_jobs(messages, str(thread_id), user.user_id)
+    return {"thread_id": str(thread_id), "messages": messages,
             "review": pending_review(snapshot)}
 
 
@@ -41,6 +45,8 @@ async def delete_thread(thread_id: UUID, request: Request, user: Annotated[Agent
     await owned_thread(store, thread_id, user)
     try:
         async with store.lock(thread_id):
+            if user.images is not None:
+                await user.images.delete_thread(str(thread_id), user.user_id)
             await request.app.state.checkpointer.adelete_thread(str(thread_id))
             await store.delete_thread(thread_id, user.user_id)
     except ConversationBusy as exc:
@@ -55,6 +61,9 @@ async def chat(body: ChatInput, request: Request, user: Annotated[AgentContext, 
         await request.app.state.store.create_thread(thread_id, user.user_id, "新对话")
     else:
         await owned_thread(request.app.state.store, thread_id, user)
+        if body.image_ids:
+            assets = await user.images.selected_assets([str(item) for item in body.image_ids], user.user_id, str(thread_id))
+            user = replace(user, selected_images=tuple(assets))
     return StreamingResponse(stream_reply(request.app.state.agent, request.app.state.store, thread_id, user, body),
                              media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

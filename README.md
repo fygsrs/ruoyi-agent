@@ -40,6 +40,13 @@ ruoyi_agent/
 │   ├── citations.py      # 聊天引用快照
 │   ├── schemas.py        # HTTP 输入和输出模型
 │   └── config.py         # 知识库配置
+├── images/
+│   ├── routes.py         # 参考图上传、任务状态与受保护图片接口
+│   ├── service.py        # 会话图片归属与生成任务
+│   ├── store.py          # PostgreSQL 图片资产与持久任务队列
+│   ├── worker.py         # 提交生成任务、恢复轮询与结果保存
+│   ├── provider.py       # 阿里云百炼异步生成与编辑接口
+│   └── tools.py          # generate_image 工具
 ├── ruoyi_client.py       # Java API 调用与响应校验
 ├── persistence.py        # 会话资料、并发锁与操作账本
 ├── tools.py              # 通用时间工具
@@ -130,7 +137,7 @@ PostgreSQL 保存 LangGraph 检查点和应用表 `agent_threads`、`agent_opera
 | `POST /chat/resume` | 提交人工审核决定 |
 | `GET /users/options` | 根据当前用户权限读取部门、角色和岗位选项 |
 
-流式事件为 `thread`、`delta`、`sources`、`review_required`、`done`、`error`。
+流式事件为 `thread`、`delta`、`sources`、`artifact`、`review_required`、`done`、`error`。
 `review_required` 表示本轮已暂停，`done` 表示运行完成，两者都结束本次 SSE。
 左侧会话列表支持切换、新建和删除；正在处理的会话不能删除。删除会话不会撤销已执行的用户操作，业务操作账本继续保留。
 
@@ -236,6 +243,43 @@ Milvus 服务端需配置 DashScope embedding provider 和 ali rerank provider �
 | `GET /knowledge/assets/{asset_id}` | 解析图片 |
 
 前端统一使用既有 `/agent-api` 代理，无需新增对外端口。原件目录需持久保存，备份时与 PostgreSQL、Milvus 一并处理。
+
+## 图片生成与编辑
+
+所有已登录用户可在聊天中描述要生成的图片，模型通过 `generate_image` 创建异步任务。
+默认使用阿里云百炼的 `qwen-image-3.0`；在 `.env` 配置服务端 `DASHSCOPE_API_KEY`，
+可通过 `IMAGE_MODEL`、`IMAGE_API_BASE_URL` 和 `IMAGE_DATA_DIR` 指定模型、接口地址和持久目录。
+API Key 仅由 Python 服务使用，不发送给浏览器或聊天模型。
+
+除 API 外，需另开终端运行一个图片 worker：
+
+```powershell
+uv run python -m ruoyi_agent.images.worker
+```
+
+聊天输入区支持上传 JPG、PNG、WebP 参考图，单张最多 10 MB、宽高最多 8000 像素、长宽比最多 10:1，
+每轮最多选择 3 张。点击历史图片下的“基于此图修改”也可将其加入参考图。
+上传先返回真实 `image_id`，发送消息时在 `POST /chat` 的 `image_ids` 中携带所选编号；
+模型编辑图片时将这些编号传入 `reference_image_ids`，由服务端检查图片属于当前用户及会话。
+默认生成 1024 × 1024 图片，也可描述其他尺寸；生成像素面积限定在 512² 至 2048²，比例不超过 8:1。
+
+工具每次提交一张图片，SSE `artifact` 事件返回 `{"type":"image_generation","job_id":"UUID"}`。
+图片卡片独立查询任务状态并展示排队、提交、生成、成功、失败或结果待确认，生成期间可继续聊天。
+图片任务及资产保存在 PostgreSQL 的 `agent_image_jobs`、`agent_image_assets` 中，
+上传原图与生成结果保存在 `data/images/{thread_id}/`；刷新页面或恢复历史会话后仍可查看、下载和继续编辑。
+原文件通过携带若依 Bearer 的接口读取，目录不公开；备份时同时保存 PostgreSQL 和图片目录。
+正在排队、提交或生成图片的会话暂不允许删除，删除会话会清理其图片文件与任务记录。
+
+图片功能不设置应用层每日次数、用户额度或并发配额，模型服务自身的计费和限流仍适用。
+为避免重复付费，同一工具调用使用唯一请求键，已拿到供应商任务编号的任务只恢复查询和下载，不重新提交。
+若提交时连接中断或进程在保存任务编号前退出，任务标为“结果待确认”，需在模型服务控制台核对后再决定是否重新生成。
+当前只运行一个图片 worker，启动时恢复已知任务的轮询，并将未确认的提交保留为待核对状态。
+
+| 接口 | 用途 |
+| --- | --- |
+| `POST /chat/{thread_id}/images` | multipart `file` 上传参考图并返回 `image_id` |
+| `GET /image-jobs/{job_id}` | 当前用户的任务状态及已保存图片 |
+| `GET /images/{image_id}` | 当前用户的图片预览与下载 |
 
 ## 验证
 

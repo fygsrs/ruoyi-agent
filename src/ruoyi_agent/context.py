@@ -19,3 +19,7 @@ class AgentContext:
     review: dict | None = field(default=None, repr=False, compare=False)
     analytics: Any = field(default=None, repr=False, compare=False)
     knowledge: Any = field(default=None, repr=False, compare=False)
+    images: Any = field(default=None, repr=False, compare=False)
+    thread_id: str | None = None
+    image_index: tuple[dict, ...] = ()
+    selected_images: tuple[dict, ...] = ()

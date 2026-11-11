@@ -33,3 +33,4 @@ wheels/
 
 .pytest_cache/
 /data/knowledge/
+/data/images/

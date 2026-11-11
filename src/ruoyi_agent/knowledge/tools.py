@@ -8,7 +8,7 @@ from pydantic import Field
 from pymilvus import MilvusException
 
 from ruoyi_agent.context import AgentContext
-from .citations import turn_sources
+from .citations import citation_key, turn_sources
 
 
 @tool(response_format="content_and_artifact")
@@ -23,17 +23,24 @@ async def search_knowledge(query: Annotated[str, Field(min_length=1, max_length=
     except MilvusException:
         return json.dumps({"status": "failed", "message": "知识库检索服务暂时不可用，请稍后重试。"}, ensure_ascii=False), {"sources": []}
     sources = {item["chunk_id"]: item for item in turn_sources(runtime.state["messages"])}
-    selected = []
+    by_content = {}
+    for source in sources.values():
+        by_content.setdefault(citation_key(source), source)
+    next_id = max((item["source_id"] for item in sources.values()), default=0) + 1
+    selected = {}
     for document in documents:
         metadata = document.metadata
         chunk_id = metadata["chunk_id"]
-        if chunk_id not in sources:
-            sources[chunk_id] = {
-                "source_id": len(sources) + 1, "chunk_id": chunk_id,
-                "document_id": metadata["document_id"], "kb_id": metadata["kb_id"],
-                "document_name": metadata["document_name"], "section": metadata["section"],
-                "page": metadata["page"], "asset_ids": metadata["asset_ids"],
-                "excerpt": document.page_content,
-            }
-        selected.append(sources[chunk_id])
-    return json.dumps({"status": "ok", "sources": selected}, ensure_ascii=False), {"sources": list(sources.values())}
+        source = {
+            "chunk_id": chunk_id, "document_id": metadata["document_id"], "kb_id": metadata["kb_id"],
+            "document_name": metadata["document_name"], "section": metadata["section"],
+            "page": metadata["page"], "asset_ids": metadata["asset_ids"], "excerpt": document.page_content,
+        }
+        key = citation_key(source)
+        if key not in by_content:
+            source["source_id"] = next_id
+            next_id += 1
+            sources[chunk_id] = by_content[key] = source
+        canonical = by_content[key]
+        selected[canonical["source_id"]] = canonical
+    return json.dumps({"status": "ok", "sources": list(selected.values())}, ensure_ascii=False), {"sources": list(sources.values())}

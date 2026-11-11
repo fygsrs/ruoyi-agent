@@ -19,6 +19,7 @@ class ChatRequest(BaseModel):
     action: Literal["chat"]
     thread_id: UUID
     content: MessageText
+    image_ids: Annotated[list[UUID], Field(max_length=3)] = Field(default_factory=list)
 
 
 ChatInput = Annotated[GreetingRequest | ChatRequest, Field(discriminator="action")]

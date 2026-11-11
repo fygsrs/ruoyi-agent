@@ -22,10 +22,14 @@ from ruoyi_agent.knowledge.routes import router as knowledge_router, register_er
 from ruoyi_agent.knowledge.service import KnowledgeService
 from ruoyi_agent.knowledge.store import KnowledgeStore
 from ruoyi_agent.knowledge.vectorstore import KnowledgeVectorStore
+from ruoyi_agent.images.config import load_image_settings
+from ruoyi_agent.images.routes import router as image_router, register_errors as register_image_errors
+from ruoyi_agent.images.service import ImageService
+from ruoyi_agent.images.store import ImageStore
 
 
 def create_app(*, agent: Any = None, java_client: httpx.AsyncClient | None = None, store=None,
-               analytics=None, checkpointer=None, knowledge=None) -> FastAPI:
+               analytics=None, checkpointer=None, knowledge=None, images=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -48,9 +52,13 @@ def create_app(*, agent: Any = None, java_client: httpx.AsyncClient | None = Non
                 vectors = KnowledgeVectorStore(knowledge_settings)
                 stack.push_async_callback(vectors.close)
                 application.state.knowledge = KnowledgeService(knowledge_store, vectors, knowledge_settings)
+                image_store = ImageStore(pool)
+                await image_store.setup()
+                application.state.images = ImageService(image_store, load_image_settings())
             else:
                 application.state.store = store
                 application.state.knowledge = knowledge
+                application.state.images = images
                 saver = checkpointer
             application.state.checkpointer = saver
             application.state.agent = build_agent(load_settings(), checkpointer=saver) if agent is None else agent
@@ -75,5 +83,7 @@ def create_app(*, agent: Any = None, java_client: httpx.AsyncClient | None = Non
 
     application.include_router(chat_router)
     application.include_router(knowledge_router)
+    application.include_router(image_router)
     register_errors(application)
+    register_image_errors(application)
     return application

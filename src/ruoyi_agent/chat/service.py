@@ -12,7 +12,7 @@ from openai import APIError
 from ruoyi_agent.chat.schemas import ChatRequest, GreetingRequest, ResumeRequest
 from ruoyi_agent.context import AgentContext
 from ruoyi_agent.persistence import ConversationBusy
-from ruoyi_agent.knowledge.citations import turn_sources
+from ruoyi_agent.knowledge.citations import display_sources, turn_sources
 
 
 def encode_event(event: str, data: dict) -> str:
@@ -33,21 +33,45 @@ def pending_review(snapshot) -> dict | None:
 def visible_messages(snapshot) -> list[dict]:
     result = []
     sources = []
+    artifacts = []
     for message in snapshot.values.get("messages", []):
         if isinstance(message, HumanMessage):
+            if artifacts:
+                result.append({"role": "assistant", "content": "", "artifacts": artifacts})
+                artifacts = []
             sources = []
             # The initial greeting prompt is an internal user turn.
             if message.additional_kwargs.get("greeting"):
                 continue
-            result.append({"role": "user", "content": message.text})
+            visible = {"role": "user", "content": message.additional_kwargs.get("display_content", message.text)}
+            if message.additional_kwargs.get("images"):
+                visible["images"] = message.additional_kwargs["images"]
+            result.append(visible)
         elif isinstance(message, ToolMessage) and message.name == "search_knowledge" and message.artifact:
-            sources = message.artifact["sources"]
-        elif isinstance(message, AIMessage) and message.text:
+            sources = display_sources(message.artifact["sources"])
+        elif isinstance(message, ToolMessage) and message.name == "generate_image" and message.artifact:
+            artifacts = [*artifacts, message.artifact]
+        elif isinstance(message, AIMessage) and (message.text or artifacts and not message.tool_calls):
             visible = {"role": "assistant", "content": message.text}
             if sources:
                 visible["sources"] = sources
+            if artifacts:
+                visible["artifacts"] = artifacts
+                artifacts = []
             result.append(visible)
+    if artifacts:
+        result.append({"role": "assistant", "content": "", "artifacts": artifacts})
     return result
+
+
+def turn_image_artifacts(messages) -> list[dict]:
+    artifacts = {}
+    for message in messages:
+        if isinstance(message, HumanMessage):
+            artifacts.clear()
+        elif isinstance(message, ToolMessage) and message.name == "generate_image" and message.artifact:
+            artifacts[message.artifact["job_id"]] = message.artifact
+    return list(artifacts.values())
 
 
 async def stream_reply(agent, store, thread_id: UUID, user: AgentContext, body):
@@ -89,23 +113,42 @@ async def stream_reply(agent, store, thread_id: UUID, user: AgentContext, body):
                     if len(messages) >= 100 or sum(len(message.text) for message in messages) + len(body.content) > 64000:
                         yield encode_event("error", {"message": "会话已达到长度上限，请新建对话。"})
                         return
-                    inputs = {"messages": [HumanMessage(content=body.content)]}
+                    content = body.content
+                    image_data = {}
+                    if user.selected_images:
+                        content += "\n本轮参考图片编号（用于图片工具）：" + json.dumps(
+                            [asset["image_id"] for asset in user.selected_images], ensure_ascii=False)
+                        image_data = {"display_content": body.content, "images": list(user.selected_images)}
+                    inputs = {"messages": [HumanMessage(content=content, additional_kwargs=image_data)]}
                     context = user
+            if context.images is not None:
+                context = replace(context, thread_id=str(thread_id),
+                                  image_index=await context.images.context_assets(str(thread_id), context.user_id))
             yield encode_event("thread", {"thread_id": str(thread_id)})
             stream = agent.astream(inputs, config=config, context=context, stream_mode=["messages", "updates"])
+            emitted_jobs = set()
             try:
                 async for mode, value in stream:
                     if mode == "messages":
                         chunk, _metadata = value
                         if isinstance(chunk, AIMessageChunk) and chunk.text:
                             yield encode_event("delta", {"text": chunk.text})
+                    elif mode == "updates" and "tools" in value:
+                        for message in value["tools"].get("messages", []):
+                            if isinstance(message, ToolMessage) and message.name == "generate_image" and message.artifact:
+                                artifact = message.artifact
+                                emitted_jobs.add(artifact["job_id"])
+                                yield encode_event("artifact", artifact)
                 snapshot = await agent.aget_state(config)
+                for artifact in turn_image_artifacts(snapshot.values.get("messages", [])):
+                    if artifact["job_id"] not in emitted_jobs:
+                        yield encode_event("artifact", artifact)
                 title = body.content[:40] if isinstance(body, ChatRequest) else None
                 await store.touch(thread_id, title)
                 review = pending_review(snapshot)
                 sources = turn_sources(snapshot.values.get("messages", []))
                 if sources:
-                    yield encode_event("sources", {"items": sources})
+                    yield encode_event("sources", {"items": display_sources(sources)})
                 if review is not None:
                     yield encode_event("review_required", review)
                 else:
