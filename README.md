@@ -1,7 +1,7 @@
 # RuoYi Agent
 
 使用 Python 3.12、uv、FastAPI 和 LangChain，模型通过 `init_chat_model` 初始化，默认 `deepseek-flash`。
-若依 Vue 3 页面自行解析 SSE，不依赖 LangChain 前端 SDK。
+若依 Vue 3 页面自行解析 SSE
 
 ## 代码结构
 
@@ -49,7 +49,7 @@ ruoyi_agent/
 │   └── tools.py          # generate_image 工具
 ├── ruoyi_client.py       # Java API 调用与响应校验
 ├── persistence.py        # 会话资料、并发锁与操作账本
-├── tools.py              # 通用时间工具
+├── tools.py              # 通用工具
 ├── cli.py                # 命令行入口
 └── server.py             # Windows 事件循环配置
 ```
@@ -153,8 +153,6 @@ PostgreSQL 保存 LangGraph 检查点和应用表 `agent_threads`、`agent_opera
 ```
 
 `decision` 支持 `approve`、`reject`、`feedback`；反馈使用 `feedback` 文本字段。
-过期或已处理的审核不能再次执行。拒绝和文字反馈均不写入 Java。
-
 ## 用户管理
 
 三个工具为 `create_user`、`update_user`、`delete_user`，分别依赖若依的
@@ -287,9 +285,3 @@ uv run python -m ruoyi_agent.images.worker
 真实 LangGraph 中断恢复、字段保留及取消连接，以及知识库上传、云端解析、检索、重处理和删除。
 可在 `sources/RuoYi-Vue3` 执行 `npm run build:prod` 验证前端构建，
 Java 构建使用上面的 Maven 命令。
-
-## 上游与许可
-
-前端基于 [RuoYi-Vue3](https://github.com/yangzongzhuan/RuoYi-Vue3)，Java 基于
-[RuoYi-Vue](https://github.com/yangzongzhuan/RuoYi-Vue) 的 `springboot3` 分支。
-两个上游项目均采用 MIT 许可；原有作者版权声明及 `LICENSE` 保留在对应 `sources/` 目录中。
