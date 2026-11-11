@@ -56,7 +56,7 @@ export function resumeAgentChat(payload, handlers) {
   return streamChatResource('/chat/resume', payload, handlers)
 }
 
-async function streamChatResource(path, payload, { signal, onDelta, onThread, onReview, onSources }) {
+async function streamChatResource(path, payload, { signal, onDelta, onThread, onReview, onSources, onArtifact }) {
   const response = await fetch(`/agent-api${path}`, {
     method: 'POST',
     headers: {
@@ -96,6 +96,10 @@ async function streamChatResource(path, payload, { signal, onDelta, onThread, on
         case 'sources':
           if (!Array.isArray(data.items)) throw new AgentChatError('服务返回了无效的引用来源')
           onSources(data.items)
+          break
+        case 'artifact':
+          if (data.type !== 'image_generation' || typeof data.job_id !== 'string') throw new AgentChatError('服务返回了无效的图片任务')
+          onArtifact(data)
           break
         case 'review_required':
           if (typeof data.interrupt_id !== 'string' || data.kind !== 'user_review' || !['create', 'update', 'delete'].includes(data.operation)) {

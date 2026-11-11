@@ -44,20 +44,33 @@
               <div v-if="!messages.length && !review && !isLoading" class="conversation-empty">
                 <div class="empty-mark" aria-hidden="true"><el-icon><ChatDotRound /></el-icon></div>
                 <h2>今天有什么可以帮你？</h2>
-                <p>查询知识库、分析数据、管理用户，在执行变更前由你确认。</p>
+                <p>查询知识库、分析数据、生成图片或管理用户。</p>
                 <el-button v-if="!threadId" type="primary" :icon="Plus" :disabled="isBusy" @click="startNewConversation">开始新对话</el-button>
               </div>
               <template v-for="message in messages" :key="message.id">
-                <article v-if="message.role === 'user' || message.content || message.status !== 'complete'" class="message-row" :class="message.role === 'user' ? 'user-message' : 'assistant-message'">
+                <article v-if="message.role === 'user' || message.content || message.artifacts?.length || message.status !== 'complete'" class="message-row" :class="message.role === 'user' ? 'user-message' : 'assistant-message'">
                   <div v-if="message.role === 'assistant'" class="message-avatar assistant-avatar" aria-hidden="true"><el-icon><ChatDotRound /></el-icon></div>
                   <div class="message-body">
                     <div class="message-author">{{ message.role === 'user' ? displayName : 'AI 助手' }}</div>
                     <div class="message-bubble" :class="[message.role === 'user' ? 'user-bubble' : 'assistant-bubble', { 'incomplete-bubble': message.status === 'error' }]">
                       <div v-if="message.content" class="message-text">{{ message.content }}<span v-if="message.status === 'streaming'" class="stream-cursor" aria-hidden="true"></span></div>
+                      <div v-if="message.images?.length" class="message-images">
+                        <ImageAsset v-for="image in message.images" :key="image.image_id" :image="image" editable :disabled="imageSelectionDisabled" @edit="useReferenceImage" @loaded="onImageLayout" @error="handleImageError" />
+                      </div>
+                      <GeneratedImageCard v-for="artifact in message.artifacts" :key="artifact.job_id" :job-id="artifact.job_id" :disabled="imageSelectionDisabled" @edit="useReferenceImage" @change="onImageLayout" @error="handleImageError" />
                       <KnowledgeSources v-if="message.sources?.length" :sources="message.sources" />
-                      <div v-else-if="message.status === 'streaming'" class="thinking"><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>正在处理</div>
+                      <div v-if="message.status === 'streaming' && !message.content && !message.artifacts?.length && !message.sources?.length" class="thinking"><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>正在处理</div>
                       <div v-if="message.status === 'error'" class="message-feedback error-feedback" role="alert"><el-icon><WarningFilled /></el-icon><span>{{ message.error }}</span></div>
                       <div v-if="message.status === 'stopped'" class="message-feedback stopped-feedback"><span class="stopped-dot"></span><span>已停止接收，请恢复会话查看保存状态</span></div>
+                    </div>
+                    <div v-if="showSuggestedQuestions && message.role === 'assistant' && message.status === 'complete' && message.id === messages.at(-1).id" class="suggested-questions">
+                      <div class="suggestions-heading">想先体验哪项功能？<span>点击直接发送</span></div>
+                      <div class="suggestion-list">
+                        <button v-for="question in suggestedQuestions" :key="question.title" type="button" class="suggestion-button" :disabled="imageSelectionDisabled" @click="sendMessage(question.prompt)">
+                          <span class="suggestion-title"><el-icon aria-hidden="true"><component :is="question.icon" /></el-icon>{{ question.title }}</span>
+                          <span class="suggestion-prompt">{{ question.prompt }}</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div v-if="message.role === 'user'" class="message-avatar user-avatar" aria-hidden="true"><el-icon><User /></el-icon></div>
@@ -71,10 +84,23 @@
         <div class="composer-area">
           <div v-if="review" class="pending-review-note"><el-icon><WarningFilled /></el-icon>当前操作等待审核，请填写上方表单，或发送修改要求。</div>
           <div class="composer">
+            <div v-if="selectedImages.length" class="composer-references">
+              <div class="reference-heading">参考图片 {{ selectedImages.length }} / {{ MAX_REFERENCE_IMAGES }}<span>请在下方说明生成或修改要求</span></div>
+              <div class="reference-images">
+                <div v-for="image in selectedImages" :key="image.image_id" class="reference-image">
+                  <ImageAsset :image="image" :actions="false" compact @error="handleImageError" />
+                  <el-button class="reference-remove" circle size="small" :icon="Close" :disabled="isBusy" :aria-label="`移除参考图：${image.name}`" @click="removeReferenceImage(image.image_id)" />
+                </div>
+              </div>
+            </div>
             <el-input ref="inputRef" v-model="draft" type="textarea" :autosize="{ minRows: 1, maxRows: 5 }"
-              :maxlength="MAX_MESSAGE_LENGTH" :disabled="!!review || isLoading || needsRecovery || !threadId" :placeholder="review ? '请先处理待审核操作' : !threadId ? '开始新对话后，向助手发送消息' : '向助手发送消息，例如：帮我新增一个用户…'" aria-label="聊天消息" resize="none" @keydown="onInputKeydown" />
+              :maxlength="MAX_MESSAGE_LENGTH" :disabled="!!review || isLoading || needsRecovery || !threadId" :placeholder="review ? '请先处理待审核操作' : !threadId ? '开始新对话后，向助手发送消息' : '描述你的需求，例如创建用户、查询知识库，或生成和修改图片…'" aria-label="聊天消息" resize="none" @keydown="onInputKeydown" />
             <div class="composer-toolbar">
-              <div class="keyboard-hint">Enter 发送<span>·</span>Shift + Enter 换行</div>
+              <div class="composer-tools">
+                <input ref="imageInputRef" class="image-file-input" type="file" accept="image/jpeg,image/png,image/webp" multiple @change="onImagesSelected" />
+                <el-button class="attach-button" text size="small" :icon="Picture" :loading="isUploading" :disabled="imageSelectionDisabled || selectedImages.length >= MAX_REFERENCE_IMAGES" title="最多 3 张参考图，支持 JPG、PNG、WEBP，单张不超过 10MB" @click="imageInputRef.click()">{{ isUploading ? '上传中' : '参考图' }}</el-button>
+                <div class="keyboard-hint">Enter 发送<span>·</span>Shift + Enter 换行</div>
+              </div>
               <div class="composer-actions">
                 <span v-if="draft.length" class="character-count" :class="{ 'near-limit': draft.length > 7500 }">{{ draft.length }} / {{ MAX_MESSAGE_LENGTH }}</span>
                 <el-button v-if="isStreaming" class="stop-button" size="small" :icon="VideoPause" @click="stop">停止接收</el-button>
@@ -92,21 +118,31 @@
 <script setup name="AgentChat">
 import { computed, nextTick, ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
-import { ArrowDown, ChatDotRound, CircleCheck, Close, Delete, Expand, Plus, Position, User, VideoPause, WarningFilled } from '@element-plus/icons-vue'
-import { MAX_MESSAGE_LENGTH, useAgentChat } from '@/composables/useAgentChat'
+import { ArrowDown, ChatDotRound, CircleCheck, Close, Delete, Expand, Picture, Plus, Position, Reading, User, VideoPause, WarningFilled } from '@element-plus/icons-vue'
+import { MAX_MESSAGE_LENGTH, MAX_REFERENCE_IMAGES, useAgentChat } from '@/composables/useAgentChat'
 import UserReviewCard from './components/UserReviewCard.vue'
 import KnowledgeSources from './components/KnowledgeSources.vue'
+import GeneratedImageCard from './components/GeneratedImageCard.vue'
+import ImageAsset from './components/ImageAsset.vue'
 
-const { messages, threads, threadId, review, isStreaming, isLoading, isBusy, needsRecovery, loadError, displayName, deletingThreadId,
-  send, stop, submitReview, newConversation, selectConversation, recoverConversation, removeConversation } = useAgentChat()
+const { messages, threads, threadId, review, isStreaming, isLoading, isUploading, selectedImages, isBusy, needsRecovery, loadError, displayName, deletingThreadId,
+  send, stop, uploadImages, addReferenceImage, removeReferenceImage, handleImageError, submitReview, newConversation, selectConversation, recoverConversation, removeConversation } = useAgentChat()
 const draft = ref('')
 const inputRef = ref(null)
+const imageInputRef = ref(null)
 const conversationRef = ref(null)
 const followLatest = ref(true)
 const sidebarOpen = ref(false)
 const sidebarRef = ref(null)
 const sidebarToggleRef = ref(null)
 const sidebarCloseRef = ref(null)
+const imageSelectionDisabled = computed(() => isBusy.value || !!review.value || needsRecovery.value || !threadId.value)
+const suggestedQuestions = [
+  { title: '新增用户', icon: User, prompt: '新增一个用户，账号 demo001，昵称“演示用户”' },
+  { title: '知识库问答', icon: Reading, prompt: '帮我查一下员工手册里的请假流程' },
+  { title: '生成图片', icon: Picture, prompt: '生成一张清晨海边日出的写实照片' }
+]
+const showSuggestedQuestions = computed(() => !messages.value.some(message => message.role === 'user') && !selectedImages.value.length && !loadError.value && !needsRecovery.value)
 
 const currentConversationTitle = computed(() => {
   const current = threads.value.find(thread => thread.thread_id === threadId.value)
@@ -149,6 +185,20 @@ async function jumpToLatest() {
 watch([messages, review], async () => {
   if (followLatest.value) await jumpToLatest()
 }, { deep: true })
+
+function onImageLayout() {
+  if (followLatest.value) void jumpToLatest()
+}
+
+function onImagesSelected(event) {
+  const files = Array.from(event.target.files)
+  event.target.value = ''
+  void uploadImages(files)
+}
+
+function useReferenceImage(image) {
+  if (addReferenceImage(image)) inputRef.value?.focus()
+}
 
 async function openSidebar() {
   sidebarOpen.value = true
@@ -206,7 +256,11 @@ async function confirmRemoveConversation(thread) {
 }
 
 function sendDraft() {
-  if (send(draft.value)) {
+  sendMessage(draft.value)
+}
+
+function sendMessage(text) {
+  if (send(text)) {
     draft.value = ''
     void jumpToLatest()
     inputRef.value?.focus()
@@ -297,6 +351,18 @@ function startNewConversation() {
 .message-bubble { padding: 12px 16px; border-radius: 10px; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
 .assistant-bubble { border: 1px solid var(--el-border-color-extra-light); border-top-left-radius: 3px; background: #f8fafc; }
 .message-text, .user-bubble { white-space: pre-wrap; }
+.suggested-questions { margin-top: 16px; }
+.suggestions-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 10px; color: var(--el-text-color-secondary); font-size: 12px; }
+.suggestions-heading > span { color: var(--el-text-color-placeholder); font-size: 11px; }
+.suggestion-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.suggestion-button { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 13px 14px; border: 1px solid var(--el-border-color-lighter); border-radius: 9px; background: var(--el-bg-color); color: var(--el-text-color-primary); font: inherit; text-align: left; cursor: pointer; }
+.suggestion-button:hover:not(:disabled) { border-color: var(--el-color-primary-light-5); background: var(--el-color-primary-light-9); }
+.suggestion-button:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 2px; }
+.suggestion-button:disabled { cursor: not-allowed; opacity: .5; }
+.suggestion-title { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 500; }
+.suggestion-title .el-icon { color: var(--el-color-primary); font-size: 16px; }
+.suggestion-prompt { color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.message-images { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; }
 .user-message { justify-content: flex-end; }
 .user-message .message-body { max-width: min(85%, 840px); }
 .user-message .message-author { text-align: right; margin-right: 2px; }
@@ -318,9 +384,18 @@ function startNewConversation() {
 .composer-area { flex-shrink: 0; padding: 8px 28px 10px; }
 .composer { margin: 0 auto; border: 1px solid var(--el-border-color); border-radius: 10px; background: var(--el-bg-color); transition: border-color .2s, box-shadow .2s; }
 .composer:focus-within { border-color: var(--el-color-primary); box-shadow: 0 0 0 3px var(--el-color-primary-light-9); }
+.composer-references { padding: 10px 13px 2px; }
+.reference-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 8px; color: var(--el-text-color-secondary); font-size: 11px; }
+.reference-heading > span { color: var(--el-text-color-placeholder); font-size: 10px; }
+.reference-images { display: flex; gap: 10px; }
+.reference-image { position: relative; }
+.reference-remove { position: absolute; top: -5px; right: -5px; width: 21px; height: 21px; padding: 0; font-size: 11px; }
+.image-file-input { display: none; }
 .composer :deep(.el-textarea__inner) { padding: 10px 13px 4px; border: 0; box-shadow: none; background: transparent; color: var(--el-text-color-primary); font-size: 13px; line-height: 1.7; }
 .composer :deep(.el-textarea.is-disabled .el-textarea__inner) { color: var(--el-text-color-disabled); }
 .composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 3px 8px 7px 13px; }
+.composer-tools { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.attach-button { flex-shrink: 0; margin-left: -7px; font-size: 11px; }
 .keyboard-hint { color: var(--el-text-color-placeholder); font-size: 10px; }
 .keyboard-hint span { padding: 0 5px; }
 .composer-actions { display: flex; align-items: center; gap: 10px; }
@@ -366,10 +441,15 @@ function startNewConversation() {
   .message-body { max-width: calc(100% - 34px); }
   .user-message .message-body { max-width: calc(100% - 34px); }
   .message-bubble { padding: 10px 12px; font-size: 13px; }
+  .suggestion-list { grid-template-columns: 1fr; gap: 8px; }
+  .suggestion-button { gap: 5px; padding: 11px 12px; }
   .composer-area { padding: 7px 12px 8px; }
   .pending-review-note { font-size: 11px; }
   .keyboard-hint { display: none; }
-  .composer-toolbar { justify-content: flex-end; }
+  .composer-toolbar { gap: 8px; }
+  .composer-tools { gap: 0; }
+  .composer-actions { gap: 6px; }
+  .character-count { font-size: 9px; }
   .composer-note { justify-content: center; font-size: 9px; }
   .session-note { display: none; }
 }

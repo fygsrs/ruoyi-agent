@@ -2,10 +2,14 @@ import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref }
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { AgentChatError, deleteAgentThread, getAgentThread, listAgentThreads, resumeAgentChat, streamAgentChat } from '@/api/agent/chat'
+import { uploadAgentImage } from '@/api/agent/images'
 import { removeToken } from '@/utils/auth'
 import useUserStore from '@/store/modules/user'
 
 export const MAX_MESSAGE_LENGTH = 8000
+export const MAX_REFERENCE_IMAGES = 3
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const IMAGE_MEDIA_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 
 export function useAgentChat() {
   const messages = ref([])
@@ -14,6 +18,8 @@ export function useAgentChat() {
   const review = ref(null)
   const isStreaming = ref(false)
   const isLoading = ref(false)
+  const isUploading = ref(false)
+  const selectedImages = ref([])
   const deletingThreadId = ref('')
   const needsRecovery = ref(false)
   const loadError = ref('')
@@ -21,10 +27,13 @@ export function useAgentChat() {
   const route = useRoute()
   const router = useRouter()
   let activeRequest = null
+  let imageUploadRequest = null
   let isActive = true
+  let isExpiringSession = false
+  let nextMessageId = 0
 
   const displayName = computed(() => userStore.nickName || userStore.name)
-  const isBusy = computed(() => isStreaming.value || isLoading.value || !!deletingThreadId.value)
+  const isBusy = computed(() => isStreaming.value || isLoading.value || isUploading.value || !!deletingThreadId.value)
   const storageKey = computed(() => `ruoyi-agent.thread.${userStore.id}`)
 
   function rememberThread(id) {
@@ -33,6 +42,8 @@ export function useAgentChat() {
   }
 
   async function expireSession() {
+    if (isExpiringSession) return
+    isExpiringSession = true
     ElMessage.warning('登录已失效，请重新登录')
     const redirect = route.fullPath
     removeToken()
@@ -45,8 +56,12 @@ export function useAgentChat() {
     else ElMessage.error(error.message)
   }
 
+  function handleImageError(error) {
+    if (error instanceof AgentChatError && error.status === 401) void expireSession()
+  }
+
   function restoreMessages(history) {
-    messages.value = history.map(message => ({ ...message, id: crypto.randomUUID(), status: 'complete', error: '' }))
+    messages.value = history.map(message => ({ ...message, id: ++nextMessageId, status: 'complete', error: '' }))
   }
 
   async function refreshThreads(signal) {
@@ -56,6 +71,7 @@ export function useAgentChat() {
 
   async function readThread(id, signal) {
     const data = await getAgentThread(id, signal)
+    if (data.thread_id !== threadId.value) selectedImages.value = []
     rememberThread(data.thread_id)
     restoreMessages(data.messages)
     review.value = data.review
@@ -86,6 +102,7 @@ export function useAgentChat() {
     threadId.value = ''
     localStorage.removeItem(storageKey.value)
     messages.value = []
+    selectedImages.value = []
     review.value = null
     needsRecovery.value = false
     loadError.value = ''
@@ -118,7 +135,7 @@ export function useAgentChat() {
   }
 
   async function runStream(payload, mode = 'chat') {
-    const reply = { id: crypto.randomUUID(), role: 'assistant', content: '', status: 'streaming', error: '' }
+    const reply = { id: ++nextMessageId, role: 'assistant', content: '', artifacts: [], status: 'streaming', error: '' }
     messages.value.push(reply)
     const message = messages.value.at(-1)
     const request = { controller: new AbortController(), message }
@@ -141,6 +158,9 @@ export function useAgentChat() {
         },
         onSources(data) {
           if (activeRequest === request) message.sources = data
+        },
+        onArtifact(data) {
+          if (activeRequest === request) message.artifacts.push(data)
         }
       })
       if (activeRequest !== request) return
@@ -172,9 +192,64 @@ export function useAgentChat() {
       ElMessage.warning('消息不能超过 8000 字符')
       return false
     }
-    messages.value.push({ id: crypto.randomUUID(), role: 'user', content, status: 'complete', error: '' })
-    void runStream({ action: 'chat', thread_id: threadId.value, content })
+    const images = selectedImages.value.slice()
+    messages.value.push({ id: ++nextMessageId, role: 'user', content, images, status: 'complete', error: '' })
+    selectedImages.value = []
+    void runStream({ action: 'chat', thread_id: threadId.value, content, image_ids: images.map(image => image.image_id) })
     return true
+  }
+
+  async function uploadImages(files) {
+    if (!isActive || isBusy.value || needsRecovery.value || review.value || !threadId.value || !files.length) return
+    if (selectedImages.value.length + files.length > MAX_REFERENCE_IMAGES) {
+      ElMessage.warning('模型最多支持 3 张参考图，请减少选择的图片')
+      return
+    }
+    for (const file of files) {
+      if (!IMAGE_MEDIA_TYPES.includes(file.type)) {
+        ElMessage.warning(`${file.name}：仅支持 JPG、PNG、WEBP 图片`)
+        return
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        ElMessage.warning(`${file.name}：单张图片不能超过 10MB`)
+        return
+      }
+    }
+    const request = { controller: new AbortController() }
+    imageUploadRequest = request
+    isUploading.value = true
+    try {
+      for (const file of files) {
+        const image = await uploadAgentImage(threadId.value, file, request.controller.signal)
+        if (request.controller.signal.aborted) return
+        selectedImages.value.push(image)
+      }
+    } catch (error) {
+      if (request.controller.signal.aborted) return
+      if (!(error instanceof AgentChatError)) throw error
+      await reportError(error)
+    } finally {
+      if (imageUploadRequest === request) {
+        imageUploadRequest = null
+        isUploading.value = false
+      }
+    }
+  }
+
+  function addReferenceImage(image) {
+    if (!isActive || isBusy.value || needsRecovery.value || review.value || !threadId.value) return false
+    if (selectedImages.value.some(item => item.image_id === image.image_id)) return true
+    if (selectedImages.value.length === MAX_REFERENCE_IMAGES) {
+      ElMessage.warning('模型最多支持 3 张参考图，请先移除一张参考图')
+      return false
+    }
+    selectedImages.value.push(image)
+    return true
+  }
+
+  function removeReferenceImage(imageId) {
+    if (isBusy.value) return
+    selectedImages.value = selectedImages.value.filter(image => image.image_id !== imageId)
   }
 
   function submitReview(decision) {
@@ -183,6 +258,9 @@ export function useAgentChat() {
   }
 
   function stop() {
+    imageUploadRequest?.controller.abort()
+    imageUploadRequest = null
+    isUploading.value = false
     if (!activeRequest) return
     const request = activeRequest
     if (request.message) {
@@ -247,6 +325,6 @@ export function useAgentChat() {
   onDeactivated(leavePage)
   onBeforeUnmount(leavePage)
 
-  return { messages, threads, threadId, review, isStreaming, isLoading, isBusy, deletingThreadId, needsRecovery, loadError, displayName,
-    send, stop, submitReview, newConversation, selectConversation, removeConversation, recoverConversation }
+  return { messages, threads, threadId, review, isStreaming, isLoading, isUploading, selectedImages, isBusy, deletingThreadId, needsRecovery, loadError, displayName,
+    send, stop, uploadImages, addReferenceImage, removeReferenceImage, handleImageError, submitReview, newConversation, selectConversation, removeConversation, recoverConversation }
 }

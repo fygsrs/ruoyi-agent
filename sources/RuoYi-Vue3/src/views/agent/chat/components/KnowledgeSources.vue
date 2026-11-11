@@ -4,7 +4,7 @@
     <el-collapse v-model="expandedSources" @change="loadExpandedAssets">
       <el-collapse-item v-for="source in sources" :key="source.source_id" :name="source.source_id">
         <template #title>
-          <span class="source-number">{{ source.source_id }}</span>
+          <span class="source-number">{{ source.source_ids ? source.source_ids.join('、') : source.source_id }}</span>
           <span class="source-title">{{ source.document_name }}</span>
           <span v-if="source.page" class="source-location">第 {{ source.page }} 页</span>
         </template>
@@ -114,7 +114,7 @@ onBeforeUnmount(releaseAssets)
 .knowledge-sources :deep(.el-collapse-item__header) { min-height: 36px; height: auto; gap: 7px; border-bottom-color: var(--el-border-color-extra-light); background: transparent; font-size: 12px; line-height: 1.6; }
 .knowledge-sources :deep(.el-collapse-item__wrap) { background: transparent; border-bottom-color: var(--el-border-color-extra-light); }
 .knowledge-sources :deep(.el-collapse-item__content) { padding: 9px 0 12px; }
-.source-number { display: inline-grid; place-items: center; flex-shrink: 0; width: 19px; height: 19px; border-radius: 4px; background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-size: 10px; }
+.source-number { display: inline-grid; place-items: center; flex-shrink: 0; min-width: 19px; height: 19px; padding: 0 4px; box-sizing: border-box; border-radius: 4px; background: var(--el-color-primary-light-9); color: var(--el-color-primary); font-size: 10px; }
 .source-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-location { flex-shrink: 0; color: var(--el-text-color-secondary); font-size: 10px; }
 .source-section { margin-bottom: 6px; color: var(--el-text-color-secondary); font-size: 11px; }

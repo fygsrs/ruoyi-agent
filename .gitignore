@@ -34,3 +34,11 @@ wheels/
 .pytest_cache/
 /data/knowledge/
 /data/images/
+
+# 仅本地使用的脚本与文档
+/.dockerignore
+/build-backend.ps1
+/setup-claude-deepseek.ps1
+/start.ps1
+/stop.ps1
+/员工手册.pdf
